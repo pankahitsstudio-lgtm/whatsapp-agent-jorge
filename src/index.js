@@ -7,8 +7,6 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  makeInMemoryStore,
-  jidNormalizedUser,
   isJidBroadcast,
   isJidGroup,
 } from '@whiskeysockets/baileys';
