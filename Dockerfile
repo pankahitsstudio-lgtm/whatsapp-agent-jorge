@@ -1,8 +1,11 @@
 FROM node:20-alpine
 
+# Dependencias de sistema necessarias para Baileys
+RUN apk add --no-cache git python3 make g++ 
+
 WORKDIR /app
 
-# Dependencias
+# Dependencias Node
 COPY package*.json ./
 RUN npm install --omit=dev
 
