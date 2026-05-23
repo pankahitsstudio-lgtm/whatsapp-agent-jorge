@@ -157,6 +157,18 @@ async function handleMessage(sock, msg) {
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption || null;
 
+  // Audio: avisa que nao consegue ouvir
+  const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage);
+  if (isAudio) {
+    if (BLOCKED.has(jid) || isManual(jid)) return;
+    await sock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 1500));
+    await sock.sendPresenceUpdate('paused', jid);
+    await sock.sendMessage(jid, { text: 'Oi! To sem conseguir ouvir audio agora, manda por escrito que respondo na hora.' });
+    console.log(`[AUDIO] Aviso enviado para ${numero}`);
+    return;
+  }
+
   if (!text) return;
   console.log(`[MSG] ${numero}: "${text.substring(0, 60)}"`);
   if (BLOCKED.has(jid) || isManual(jid)) return;
