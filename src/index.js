@@ -18,12 +18,37 @@ const logger = pino({ level: 'silent' });
 
 let currentQR = null;
 let isConnected = false;
+let sockGlobal = null;
 
-// Servidor HTTP - QR code com CORS aberto
+// Servidor HTTP
 const server = http.createServer(async (req, res) => {
-  // CORS total para poder fazer fetch de qualquer origem
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+
+  // Endpoint para enviar mensagem proativa
+  if (req.method === 'POST' && req.url === '/send') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { number, message } = JSON.parse(body);
+        if (!sockGlobal || !isConnected) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Bot nao conectado' }));
+          return;
+        }
+        const jid = number.replace(/\D/g, '') + '@s.whatsapp.net';
+        await sockGlobal.sendMessage(jid, { text: message });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, to: jid }));
+        console.log(`[SEND] Mensagem enviada para ${jid}`);
+      } catch(e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
 
   if (req.url === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -32,60 +57,41 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/qr-data' && currentQR) {
-    // Retorna QR como JSON com data URL da imagem
     try {
       const qrDataUrl = await QRCode.toDataURL(currentQR);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ qr: qrDataUrl, connected: isConnected }));
-    } catch(e) {
-      res.writeHead(500); res.end('{}');
-    }
+    } catch(e) { res.writeHead(500); res.end('{}'); }
     return;
   }
 
-  // Pagina HTML principal com auto-refresh
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-
   if (isConnected) {
-    res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp Agent</title></head>
-    <body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
-    <h1 style="color:#25d366">✅ Bot conectado!</h1>
-    <p>O agente do Jorge esta ativo e respondendo mensagens no WhatsApp.</p>
-    <p style="color:#888;font-size:14px">Mantenha esta janela aberta enquanto quiser que o bot funcione.</p>
-    </body></html>`);
+    res.end(`<!DOCTYPE html><html><body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
+    <h1 style="color:#25d366">✅ Bot conectado!</h1><p>Agente do Jorge ativo.</p></body></html>`);
     return;
   }
-
   if (!currentQR) {
-    res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp Agent</title>
-    <meta http-equiv="refresh" content="3"></head>
+    res.end(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="3"></head>
     <body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
-    <h2>Aguardando QR code...</h2><p>A pagina vai recarregar automaticamente.</p>
-    </body></html>`);
+    <h2>Aguardando QR code...</h2><script>setTimeout(()=>location.reload(),3000)</script></body></html>`);
     return;
   }
-
   try {
     const qrImageUrl = await QRCode.toDataURL(currentQR, { width: 300 });
-    res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp Agent - QR Code</title></head>
-    <body style="background:#0d1117;text-align:center;padding:40px;font-family:sans-serif">
-    <h2 style="color:#fff;margin-bottom:8px">Escaneie com o WhatsApp</h2>
-    <p style="color:#aaa;margin-bottom:24px">WhatsApp → ··· → Dispositivos Vinculados → Vincular dispositivo</p>
+    res.end(`<!DOCTYPE html><html><body style="background:#0d1117;text-align:center;padding:40px;font-family:sans-serif">
+    <h2 style="color:#fff">Escaneie com o WhatsApp</h2>
+    <p style="color:#aaa">WhatsApp → ··· → Dispositivos Vinculados → Vincular dispositivo</p>
     <div style="display:inline-block;padding:16px;background:white;border-radius:16px">
       <img src="${qrImageUrl}" style="width:280px;height:280px;display:block">
     </div>
-    <p style="color:#666;font-size:13px;margin-top:16px">QR expira em ~60s. Pagina recarrega automaticamente.</p>
-    <script>setTimeout(()=>location.reload(),25000)</script>
-    </body></html>`);
-  } catch(e) {
-    res.writeHead(500); res.end('Erro ao gerar QR');
-  }
+    <script>setTimeout(()=>location.reload(),25000)</script></body></html>`);
+  } catch(e) { res.writeHead(500); res.end('Erro'); }
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[SERVER] Rodando na porta ${PORT}`);
-  console.log(`[SERVER] QR code em: https://whatsapp-agent-jorge-production.up.railway.app/qr`);
+  console.log(`[SERVER] Porta ${PORT} ativa`);
 });
 
 const BLOCKED = new Set(
@@ -108,28 +114,19 @@ async function connectToWhatsApp() {
     syncFullHistory: false,
   });
 
+  sockGlobal = sock;
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr) {
-      currentQR = qr;
-      isConnected = false;
-      console.log('[QR] Novo QR gerado. Acesse a URL do servico para escanear.');
-    }
+    if (qr) { currentQR = qr; isConnected = false; console.log('[QR] Novo QR gerado.'); }
     if (connection === 'close') {
-      isConnected = false;
-      currentQR = null;
+      isConnected = false; currentQR = null; sockGlobal = null;
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      if (reason === DisconnectReason.loggedOut) {
-        console.log('[WA] Deslogado. Delete auth_info e reinicie.');
-        process.exit(1);
-      } else {
-        console.log('[WA] Desconectado (' + reason + '). Reconectando...');
-        setTimeout(connectToWhatsApp, 3000);
-      }
+      if (reason === DisconnectReason.loggedOut) { console.log('[WA] Deslogado.'); process.exit(1); }
+      else { console.log('[WA] Desconectado (' + reason + '). Reconectando...'); setTimeout(connectToWhatsApp, 3000); }
     }
     if (connection === 'open') {
-      currentQR = null;
-      isConnected = true;
+      currentQR = null; isConnected = true; sockGlobal = sock;
       console.log('[WA] ✅ Conectado! Agente ativo.');
     }
   });
