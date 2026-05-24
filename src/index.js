@@ -94,9 +94,11 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[SERVER] Porta ${PORT} ativa`);
 });
 
-const BLOCKED = new Set(
-  (process.env.BLOCKED_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean).map(n => `${n}@s.whatsapp.net`)
-);
+// Lido dinamicamente a cada mensagem — alteracoes valem sem reiniciar
+function isBlocked(jid) {
+  const numbers = (process.env.BLOCKED_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean);
+  return numbers.some(n => jid.startsWith(n));
+}
 
 function humanDelay(text = '') {
   const ms = 1500 + Math.min(text.length * 30, 5000);
@@ -160,7 +162,7 @@ async function handleMessage(sock, msg) {
   // Audio: avisa que nao consegue ouvir
   const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage);
   if (isAudio) {
-    if (BLOCKED.has(jid) || isManual(jid)) return;
+    if (isBlocked(jid) || isManual(jid)) return;
     await sock.sendPresenceUpdate('composing', jid);
     await new Promise(r => setTimeout(r, 1500));
     await sock.sendPresenceUpdate('paused', jid);
@@ -171,7 +173,7 @@ async function handleMessage(sock, msg) {
 
   if (!text) return;
   console.log(`[MSG] ${numero}: "${text.substring(0, 60)}"`);
-  if (BLOCKED.has(jid) || isManual(jid)) return;
+  if (isBlocked(jid) || isManual(jid)) return;
 
   const reply = await generateReply(jid, text);
   if (!reply) return;
