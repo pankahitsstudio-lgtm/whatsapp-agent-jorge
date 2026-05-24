@@ -95,9 +95,10 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 // Lido dinamicamente a cada mensagem — alteracoes valem sem reiniciar
+// Funciona com numero de telefone E com LID do WhatsApp
 function isBlocked(jid) {
-  const numbers = (process.env.BLOCKED_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean);
-  return numbers.some(n => jid.startsWith(n));
+  const entries = (process.env.BLOCKED_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean);
+  return entries.some(n => jid.startsWith(n) || jid.includes(n));
 }
 
 function humanDelay(text = '') {
