@@ -228,6 +228,18 @@ async function handleMessage(sock, msg) {
   if (!text) return;
   console.log(`[MSG] ${numero}: "${text.substring(0, 60)}"`);
 
+  // Se a pessoa quiser falar direto com o Jorge, bot para automaticamente
+  const querJorge = /(com o jorge|direto|com ele|jorge mesmo|pessoalmente|falar com jorge)/i.test(text);
+  if (querJorge) {
+    await sock.sendPresenceUpdate('composing', jid);
+    await humanDelay('Ok! Vou chamar o Jorge, um momento.');
+    await sock.sendPresenceUpdate('paused', jid);
+    await sock.sendMessage(jid, { text: 'Ok! Vou chamar o Jorge, um momento.' });
+    setManual(jid);
+    console.log(`[MANUAL] ${numero} escolheu falar com o Jorge. Bot pausado.`);
+    return;
+  }
+
   const reply = await generateReply(jid, text);
   if (!reply) return;
 
