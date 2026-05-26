@@ -1,4 +1,3 @@
-// src/index.js - Agente WhatsApp Jorge Dimas
 import 'dotenv/config';
 import makeWASocket, {
   DisconnectReason,
@@ -6,6 +5,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   isJidBroadcast,
   isJidGroup,
+  jidNormalizedUser,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -20,32 +20,43 @@ let currentQR = null;
 let isConnected = false;
 let sockGlobal = null;
 
+// Mapa de LID -> numero real (populado conforme chegam mensagens)
+const lidToPhone = new Map();
+
+// Verifica se e bloqueado — checa numero E LID
+function isBlocked(jid) {
+  const entries = (process.env.BLOCKED_NUMBERS || '')
+    .split(',').map(n => n.trim()).filter(Boolean);
+
+  // Checa direto no JID
+  if (entries.some(n => jid.includes(n))) return true;
+
+  // Checa via mapa LID -> telefone
+  if (jid.includes('@lid')) {
+    const lid = jid.split('@')[0];
+    const phone = lidToPhone.get(lid);
+    if (phone && entries.some(n => phone.includes(n))) return true;
+  }
+
+  return false;
+}
+
 // Servidor HTTP
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
 
-  // Endpoint para enviar mensagem proativa
   if (req.method === 'POST' && req.url === '/send') {
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    req.on('data', c => { body += c; });
     req.on('end', async () => {
       try {
         const { number, message } = JSON.parse(body);
-        if (!sockGlobal || !isConnected) {
-          res.writeHead(503, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Bot nao conectado' }));
-          return;
-        }
+        if (!sockGlobal || !isConnected) { res.writeHead(503); res.end('{}'); return; }
         const jid = number.replace(/\D/g, '') + '@s.whatsapp.net';
         await sockGlobal.sendMessage(jid, { text: message });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, to: jid }));
-        console.log(`[SEND] Mensagem enviada para ${jid}`);
-      } catch(e) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
-      }
+        res.end(JSON.stringify({ ok: true }));
+      } catch(e) { res.writeHead(500); res.end('{}'); }
     });
     return;
   }
@@ -68,13 +79,13 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   if (isConnected) {
     res.end(`<!DOCTYPE html><html><body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
-    <h1 style="color:#25d366">✅ Bot conectado!</h1><p>Agente do Jorge ativo.</p></body></html>`);
+    <h1 style="color:#25d366">✅ Bot conectado!</h1></body></html>`);
     return;
   }
   if (!currentQR) {
     res.end(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="3"></head>
     <body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
-    <h2>Aguardando QR code...</h2><script>setTimeout(()=>location.reload(),3000)</script></body></html>`);
+    <h2>Aguardando QR...</h2></body></html>`);
     return;
   }
   try {
@@ -90,20 +101,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[SERVER] Porta ${PORT} ativa`);
-});
-
-// Lido dinamicamente a cada mensagem — alteracoes valem sem reiniciar
-// Funciona com numero de telefone E com LID do WhatsApp
-function isBlocked(jid) {
-  const entries = (process.env.BLOCKED_NUMBERS || '').split(',').map(n => n.trim()).filter(Boolean);
-  return entries.some(n => jid.startsWith(n) || jid.includes(n));
-}
+server.listen(PORT, '0.0.0.0', () => console.log(`[SERVER] Porta ${PORT}`));
 
 function humanDelay(text = '') {
-  const ms = 1500 + Math.min(text.length * 30, 5000);
-  return new Promise(r => setTimeout(r, ms + Math.random() * 1000));
+  return new Promise(r => setTimeout(r, 1500 + Math.min(text.length * 30, 5000) + Math.random() * 1000));
 }
 
 async function connectToWhatsApp() {
@@ -119,6 +120,21 @@ async function connectToWhatsApp() {
 
   sockGlobal = sock;
 
+  // Popula mapa LID -> telefone quando chega info de contatos
+  sock.ev.on('contacts.update', (contacts) => {
+    for (const c of contacts) {
+      if (c.id && c.notify) {
+        // Tenta extrair telefone do LID ou do proprio ID
+        const lid = c.id.split('@')[0];
+        if (c.id.includes('@lid') && c.phoneNumber) {
+          const phone = c.phoneNumber.replace(/\D/g, '');
+          lidToPhone.set(lid, phone);
+          console.log(`[LID] Mapeado: ${lid} -> ${phone}`);
+        }
+      }
+    }
+  });
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) { currentQR = qr; isConnected = false; console.log('[QR] Novo QR gerado.'); }
@@ -126,7 +142,7 @@ async function connectToWhatsApp() {
       isConnected = false; currentQR = null; sockGlobal = null;
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (reason === DisconnectReason.loggedOut) { console.log('[WA] Deslogado.'); process.exit(1); }
-      else { console.log('[WA] Desconectado (' + reason + '). Reconectando...'); setTimeout(connectToWhatsApp, 3000); }
+      else { console.log('[WA] Reconectando...'); setTimeout(connectToWhatsApp, 3000); }
     }
     if (connection === 'open') {
       currentQR = null; isConnected = true; sockGlobal = sock;
@@ -136,9 +152,36 @@ async function connectToWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Captura mensagens e popula mapa LID
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
+      // Tenta mapear LID de quem enviou
+      try {
+        const jid = msg.key.remoteJid || '';
+        if (jid.includes('@lid') && msg.key.participant) {
+          const participantPhone = msg.key.participant.split('@')[0].replace(/\D/g, '');
+          const lid = jid.split('@')[0];
+          if (participantPhone && !lidToPhone.has(lid)) {
+            lidToPhone.set(lid, participantPhone);
+          }
+        }
+        // Tambem tenta pelo pushName + verifyContact
+        if (jid.includes('@lid')) {
+          const lid = jid.split('@')[0];
+          if (!lidToPhone.has(lid)) {
+            try {
+              const result = await sock.onWhatsApp(jid);
+              if (result?.[0]?.jid) {
+                const phone = result[0].jid.split('@')[0];
+                lidToPhone.set(lid, phone);
+                console.log(`[LID] Resolvido: ${lid} -> ${phone}`);
+              }
+            } catch(e) {}
+          }
+        }
+      } catch(e) {}
+
       try { await handleMessage(sock, msg); }
       catch (err) { console.error('[MSG] Erro:', err.message); }
     }
@@ -153,28 +196,37 @@ async function handleMessage(sock, msg) {
   if (isJidGroup(msg.key.remoteJid)) return;
 
   const jid = msg.key.remoteJid;
-  const numero = jid.replace('@s.whatsapp.net', '');
+  const numero = jid.split('@')[0];
+
+  // Bloquear ANTES de qualquer processamento
+  if (isBlocked(jid)) {
+    console.log(`[BLOCK] Ignorado: ${numero}`);
+    return;
+  }
+  if (isManual(jid)) {
+    console.log(`[MANUAL] Ignorado: ${numero}`);
+    return;
+  }
+
+  // Audio
+  const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage);
+  if (isAudio) {
+    await sock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 1500));
+    await sock.sendPresenceUpdate('paused', jid);
+    await sock.sendMessage(jid, { text: 'Oi! No momento nao consigo ouvir audio. Pode mandar por escrito? Te respondo na hora!' });
+    console.log(`[AUDIO] Aviso enviado para ${numero}`);
+    return;
+  }
+
   const text =
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption || null;
 
-  // Audio: avisa que nao consegue ouvir
-  const isAudio = !!(msg.message?.audioMessage || msg.message?.pttMessage);
-  if (isAudio) {
-    if (isBlocked(jid) || isManual(jid)) return;
-    await sock.sendPresenceUpdate('composing', jid);
-    await new Promise(r => setTimeout(r, 1500));
-    await sock.sendPresenceUpdate('paused', jid);
-    await sock.sendMessage(jid, { text: 'Oi! To sem conseguir ouvir audio agora, manda por escrito que respondo na hora.' });
-    console.log(`[AUDIO] Aviso enviado para ${numero}`);
-    return;
-  }
-
   if (!text) return;
   console.log(`[MSG] ${numero}: "${text.substring(0, 60)}"`);
-  if (isBlocked(jid) || isManual(jid)) return;
 
   const reply = await generateReply(jid, text);
   if (!reply) return;
