@@ -20,22 +20,38 @@ let currentQR = null;
 let isConnected = false;
 let sockGlobal = null;
 
-// Mapa de LID -> numero real (populado conforme chegam mensagens)
+// Mapa de LID -> numero real
 const lidToPhone = new Map();
 
-// Verifica se e bloqueado — checa numero E LID
+// Contatos salvos na agenda (populado ao conectar)
+const knownContacts = new Set();
+
+// Verifica se e bloqueado
+// LOGICA: bloqueia quem esta na lista BLOCKED_NUMBERS OU quem esta salvo como contato
 function isBlocked(jid) {
+  const numero = jid.split('@')[0];
+
+  // 1. Checa lista manual de bloqueados
   const entries = (process.env.BLOCKED_NUMBERS || '')
     .split(',').map(n => n.trim()).filter(Boolean);
-
-  // Checa direto no JID
   if (entries.some(n => jid.includes(n))) return true;
 
-  // Checa via mapa LID -> telefone
+  // 2. Checa via mapa LID
   if (jid.includes('@lid')) {
     const lid = jid.split('@')[0];
     const phone = lidToPhone.get(lid);
     if (phone && entries.some(n => phone.includes(n))) return true;
+    // Bloqueia LID se o telefone resolvido e um contato conhecido
+    if (phone && knownContacts.has(phone)) {
+      console.log(`[BLOCK] Contato conhecido via LID: ${phone}`);
+      return true;
+    }
+  }
+
+  // 3. Bloqueia se numero esta nos contatos salvos
+  if (knownContacts.has(numero)) {
+    console.log(`[BLOCK] Contato conhecido: ${numero}`);
+    return true;
   }
 
   return false;
@@ -120,20 +136,28 @@ async function connectToWhatsApp() {
 
   sockGlobal = sock;
 
-  // Popula mapa LID -> telefone quando chega info de contatos
-  sock.ev.on('contacts.update', (contacts) => {
+  // Popula contatos conhecidos (agenda) ao conectar e ao atualizar
+  const loadContacts = (contacts) => {
     for (const c of contacts) {
-      if (c.id && c.notify) {
-        // Tenta extrair telefone do LID ou do proprio ID
-        const lid = c.id.split('@')[0];
-        if (c.id.includes('@lid') && c.phoneNumber) {
-          const phone = c.phoneNumber.replace(/\D/g, '');
-          lidToPhone.set(lid, phone);
-          console.log(`[LID] Mapeado: ${lid} -> ${phone}`);
-        }
+      if (!c.id) continue;
+      const numero = c.id.split('@')[0];
+      // So adiciona contatos que tem nome salvo (estao na agenda)
+      if (c.name || c.notify) {
+        knownContacts.add(numero);
+      }
+      // Mapeia LID
+      if (c.id.includes('@lid') && c.phoneNumber) {
+        const phone = c.phoneNumber.replace(/\D/g, '');
+        lidToPhone.set(numero, phone);
+        if (c.name || c.notify) knownContacts.add(phone);
       }
     }
-  });
+    console.log(`[CONTACTS] ${knownContacts.size} contatos conhecidos carregados`);
+  };
+
+  sock.ev.on('contacts.set', ({ contacts }) => loadContacts(contacts));
+  sock.ev.on('contacts.upsert', (contacts) => loadContacts(contacts));
+  sock.ev.on('contacts.update', (contacts) => loadContacts(contacts));
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
