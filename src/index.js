@@ -41,18 +41,11 @@ function isBlocked(jid) {
     const lid = jid.split('@')[0];
     const phone = lidToPhone.get(lid);
     if (phone && entries.some(n => phone.includes(n))) return true;
-    // Bloqueia LID se o telefone resolvido e um contato conhecido
-    if (phone && knownContacts.has(phone)) {
-      console.log(`[BLOCK] Contato conhecido via LID: ${phone}`);
-      return true;
-    }
+    // LID resolvido — checa apenas na lista de bloqueados manual
   }
 
-  // 3. Bloqueia se numero esta nos contatos salvos
-  if (knownContacts.has(numero)) {
-    console.log(`[BLOCK] Contato conhecido: ${numero}`);
-    return true;
-  }
+  // Contatos conhecidos: so bloqueia se estiver na lista BLOCKED_NUMBERS
+  // (nao bloqueia automaticamente toda a agenda)
 
   return false;
 }
