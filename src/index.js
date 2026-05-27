@@ -208,6 +208,10 @@ async function connectToWhatsApp() {
 }
 
 async function handleMessage(sock, msg) {
+  // MODO PAUSA TOTAL — so responde se AGENT_MODE=active
+  if (process.env.AGENT_MODE !== 'active') {
+    return;
+  }
   if (msg.key.fromMe) { await handleOutgoingCommands(msg); return; }
   if (isJidBroadcast(msg.key.remoteJid)) return;
   if (isJidGroup(msg.key.remoteJid)) return;
