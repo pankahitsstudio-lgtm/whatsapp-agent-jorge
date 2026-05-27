@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import makeWASocket, {
+import makeWASocket, { downloadMediaMessage,
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
@@ -12,6 +12,7 @@ import pino from 'pino';
 import QRCode from 'qrcode';
 import http from 'http';
 import { generateReply } from './agent.js';
+import { transcribeAudio } from './transcribe.js';
 import { setManual, setBot, isManual } from './memory.js';
 
 const logger = pino({ level: 'silent' });
